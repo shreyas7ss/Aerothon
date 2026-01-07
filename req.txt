@@ -1,0 +1,21 @@
+# --- Web Server & API ---
+fastapi[all]
+uvicorn[standard]
+python-multipart
+
+# --- Document Extraction (Native/Lightweight) ---
+pymupdf4llm
+docx2python
+
+# --- AI & Vector Database ---
+langchain
+langchain-core
+langchain-ollama
+langchain-chroma
+langchain-community
+
+# --- Graph Database ---
+neo4j
+
+# --- Utilities ---
+python-dotenv
