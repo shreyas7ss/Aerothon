@@ -4,24 +4,30 @@ import uuid
 import socket
 from typing import List
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
 from neo4j import GraphDatabase
+
 import pymupdf4llm
 from docx2python import docx2python
 
-# --- CONFIGURATION ---
-NEO4J_URI = "bolt://127.0.0.1:7687"
-NEO4J_AUTH = ("neo4j", "your_password") 
-DB_NAME = "neo4j" 
+# ---------------- CONFIG ---------------- #
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "password"
+NEO4J_AUTH = (NEO4J_USER, NEO4J_PASSWORD)
+
+DB_NAME = "neo4j"
 CHROMA_ROOT = "db_root"
 UPLOAD_DIR = "uploads"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# ---------------- UTIL ---------------- #
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -29,104 +35,102 @@ def get_local_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except:
+    except Exception:
         return "127.0.0.1"
 
+# ---------------- FASTAPI LIFESPAN ---------------- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    app.state.neo4j_driver = driver
     try:
-        app.state.neo4j_driver.verify_connectivity()
-        with app.state.neo4j_driver.session(database=DB_NAME) as session:
+        driver.verify_connectivity()
+        with driver.session(database=DB_NAME) as session:
             session.run("CREATE CONSTRAINT doc_id_unique IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE")
         print(f"✅ Neo4j Ready | 🚀 Server: http://{get_local_ip()}:8000")
     except Exception as e:
-        print(f"❌ Neo4j Failed: {e}")
-        raise e
+        print(f"❌ Neo4j Startup Failed: {e}")
+        raise
     yield
-    app.state.neo4j_driver.close()
+    driver.close()
 
 app = FastAPI(title="Knowledge Ingestion API", lifespan=lifespan)
 
+# ---------------- VECTOR STORE ---------------- #
 def get_or_create_vector_db(sensitivity: str):
     persist_path = os.path.join(CHROMA_ROOT, sensitivity, "Knowledge_vectors")
     return Chroma(
         collection_name="Knowledge_Store",
-        persist_directory=persist_path, 
+        persist_directory=persist_path,
         embedding_function=OllamaEmbeddings(model="nomic-embed-text")
     )
 
-# --- BACKGROUND TASK WITH BATCHING ---
-def process_document_task(file_path: str, filename: str, sensitivity: str, category: str):
-    """Processes documents with safety batching to prevent 5461 limit errors."""
+# ---------------- BACKGROUND INGESTION ---------------- #
+def process_document_task(neo4j_driver, file_path: str, filename: str, sensitivity: str, category: str):
     doc_id = str(uuid.uuid4())
-    print(f"⚙️ Background Ingestion Started: {filename}")
-    
+    print(f"⚙️ Ingestion Started: {filename}")
+
     try:
-        # Step 1: Extraction
-        if filename.lower().endswith(".pdf"):
-            text = pymupdf4llm.to_markdown(file_path)
-        elif filename.lower().endswith(".docx"):
-            with docx2python(file_path) as doc: text = doc.text
-        else:
-            with open(file_path, "r", encoding="utf-8") as f: text = f.read()
-
-        # Step 2: Semantic Chunking
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
-        chunks = splitter.split_text(text)
-        print(f"📄 Document split into {len(chunks)} chunks.")
-
-        # Step 3: Vector Store with Manual Batching
-        vector_db = get_or_create_vector_db(sensitivity)
-        langchain_docs = [
-            Document(page_content=c, metadata={"doc_id": doc_id, "source": filename}) 
-            for c in chunks
-        ]
+        extracted_docs = []
         
-        # FIX: We use a batch size of 5000 to stay safely under the 5461 SQLite limit
-        max_batch = 5000
-        for i in range(0, len(langchain_docs), max_batch):
-            batch = langchain_docs[i : i + max_batch]
-            print(f"📦 Adding batch {i // max_batch + 1} ({len(batch)} chunks) to Chroma...")
-            vector_db.add_documents(batch)
+        # ---- Extract with Page Awareness ----
+        if filename.lower().endswith(".pdf"):
+            # page_chunks=True allows us to see individual pages
+            pages = pymupdf4llm.to_markdown(file_path, page_chunks=True)
+            for page in pages:
+                # Some versions use 'text', others use 'metadata' dictionary
+                content = page.get("text") or page.get("metadata", {}).get("text", "")
+                page_num = page.get("metadata", {}).get("page", 0) + 1
+                extracted_docs.append(Document(
+                    page_content=content, 
+                    metadata={"source": filename, "page": page_num, "doc_id": doc_id}
+                ))
+        elif filename.lower().endswith(".docx"):
+            with docx2python(file_path) as doc:
+                extracted_docs.append(Document(page_content=doc.text, metadata={"source": filename, "page": "N/A", "doc_id": doc_id}))
+        else:
+            with open(file_path, "r", encoding="utf-8") as f:
+                extracted_docs.append(Document(page_content=f.read(), metadata={"source": filename, "page": "N/A", "doc_id": doc_id}))
 
-        # Step 4: Graph Storage (Neo4j)
-        driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
-        with driver.session(database=DB_NAME) as session:
+        # ---- Chunk (Preserving Metadata) ----
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+        # split_documents carries the 'page' and 'source' to every chunk automatically
+        final_chunks = splitter.split_documents(extracted_docs)
+        print(f"📄 {filename}: {len(final_chunks)} chunks created.")
+
+        # ---- Vector DB ----
+        vector_db = get_or_create_vector_db(sensitivity)
+        batch_size = 500
+        for i in range(0, len(final_chunks), batch_size):
+            vector_db.add_documents(final_chunks[i:i + batch_size])
+
+        # ---- Neo4j ----
+        with neo4j_driver.session(database=DB_NAME) as session:
             session.run("""
                 MERGE (d:Document {id: $id})
                 SET d.name = $name, d.sensitivity = $sens, d.status = 'processed'
                 MERGE (c:Category {name: $cat})
                 MERGE (d)-[:BELONGS_TO]->(c)
             """, id=doc_id, name=filename, sens=sensitivity, cat=category)
-        driver.close()
-        
-        print(f"✅ Background Ingestion Finished: {filename}")
-        
+
+        print(f"✅ Ingestion Finished: {filename}")
+
     except Exception as e:
-        print(f"❌ Error processing {filename}: {str(e)}")
+        print(f"❌ Ingestion Failed [{filename}]: {e}")
 
 @app.post("/ingest")
-async def ingest_pipeline(
-    background_tasks: BackgroundTasks, 
-    files: List[UploadFile] = File(...), 
-    sensitivity: str = Form("public"),
-    category: str = Form("general")
-):
+async def ingest_pipeline(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...), sensitivity: str = Form("public"), category: str = Form("general")):
     results = []
     for file in files:
         file_path = os.path.join(UPLOAD_DIR, file.filename)
         if os.path.exists(file_path):
-            results.append({"file": file.filename, "status": "skipped", "reason": "Already exists"})
+            results.append({"file": file.filename, "status": "skipped", "reason": "already exists"})
             continue
-            
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
-        background_tasks.add_task(process_document_task, file_path, file.filename, sensitivity, category)
-        results.append({"file": file.filename, "status": "upload_success"})
-
-    return {"message": "Files received. Processing batches in background.", "results": results}
+        background_tasks.add_task(process_document_task, app.state.neo4j_driver, file_path, file.filename, sensitivity, category)
+        results.append({"file": file.filename, "status": "queued"})
+    return {"message": "Files uploaded. Processing in background.", "results": results}
 
 if __name__ == "__main__":
     import uvicorn
