@@ -15,17 +15,21 @@ Base = declarative_base()
 
 class User(Base):
 	__tablename__ = "users"
-	id = Column(Integer, primary_key=True, autoincrement=True)
+	user_id = Column(Integer, primary_key=True, autoincrement=True)
 	type = Column(Enum(UserType), nullable=False)
 	username = Column(String, unique=True, nullable=False)
 	password = Column(String, nullable=False)
 	createdAt = Column(DateTime, default=datetime.now)
 
 # Connect to local Postgres DB (update credentials as needed)
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
+# Explicitly use psycopg v3 driver.
+DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create tables
+# Drop and recreate tables (for schema changes)
+def drop_tables():
+	Base.metadata.drop_all(bind=engine)
+
 def create_tables():
 	Base.metadata.create_all(bind=engine)
