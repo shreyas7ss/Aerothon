@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import Image from "next/image";
 import Link from "next/link";
 import {
@@ -31,76 +34,6 @@ function FeatureCard({
         {description}
       </p>
     </div>
-  );
-}
-
-/* ---------------- Institutional Header ---------------- */
-
-function Header() {
-  return (
-    <header className="sticky top-0 z-50">
-      {/* Light gray/blue top section */}
-      <div className="bg-slate-100">
-        {/* White content section with curved top-left */}
-        <div className="bg-white rounded-tl-[100px]">
-          <div className="mx-auto max-w-7xl px-6 h-20 flex items-center justify-between">
-            {/* Left: Logos */}
-            <div className="flex items-center gap-6">
-              {/* IIIT Dharwad */}
-              <div className="flex items-center gap-3">
-                <Image
-                  src="/iiitdwd.jpeg"
-                  alt="IIIT Dharwad"
-                  width={44}
-                  height={44}
-                  priority
-                />
-                <div className="leading-tight">
-                  <p className="text-sm font-semibold text-slate-900">
-                    IIIT Dharwad
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    Institute of National Importance
-                  </p>
-                </div>
-              </div>
-
-              <div className="h-10 w-px bg-slate-300" />
-
-              {/* HAL */}
-              <div className="flex items-center gap-3">
-                <Image
-                  src="/hal.jpeg"
-                  alt="Hindustan Aeronautics Limited"
-                  width={56}
-                  height={44}
-                  priority
-                />
-                <div className="leading-tight">
-                  <p className="text-sm font-semibold text-slate-900">
-                    Hindustan Aeronautics Ltd.
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    A Maharatna CPSE
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: Login only */}
-            <Link
-              href="/login"
-              className="h-10 px-5 inline-flex items-center rounded-md border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
-            >
-              Login
-            </Link>
-          </div>
-        </div>
-      </div>
-      
-      {/* Blue navigation bar */}
-      <div className="bg-blue-900 h-12"></div>
-    </header>
   );
 }
 
@@ -143,12 +76,24 @@ const constraints = [
 /* ---------------- Page ---------------- */
 
 export default function HomePage() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userType, setUserType] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    const storedUserType = localStorage.getItem('user_type');
+    
+    if (token) {
+      setIsLoggedIn(true);
+      setUserType(storedUserType);
+    }
+  }, []);
+
   return (
     <main className="min-h-screen bg-slate-50">
-      <Header />
-
       {/* Hero */}
-      <section className="mx-auto max-w-6xl px-6 py-24">
+      {!isLoggedIn ? (
+        <section className="mx-auto max-w-6xl px-6 py-24">
         <div className="max-w-3xl">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-300 text-sm text-slate-700 mb-6">
             <Lock className="w-4 h-4" />
@@ -179,8 +124,8 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+      ): ""}
 
-      {/* Features */}
       <section className="bg-white border-t border-slate-200">
         <div className="mx-auto max-w-6xl px-6 py-20">
           <h2 className="text-3xl font-bold text-slate-900 mb-12">
@@ -217,6 +162,58 @@ export default function HomePage() {
           </ul>
         </div>
       </section>
+       : (
+        <section className="mx-auto max-w-6xl px-6 py-24">
+          <h1 className="text-4xl font-bold text-slate-900 mb-8">
+            Welcome to Aerothon
+          </h1>
+          <p className="text-lg text-slate-600 mb-12">
+            Offline AI-Powered Knowledge Portal
+          </p>
+
+          {userType === 'admin' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl">
+              <div className="bg-white rounded-xl p-8 border border-slate-200 shadow-sm">
+                <div className="w-12 h-12 rounded-md bg-blue-100 flex items-center justify-center mb-4">
+                  <Upload className="w-6 h-6 text-blue-600" />
+                </div>
+                <h3 className="text-xl font-semibold text-slate-900 mb-2">
+                  File Upload
+                </h3>
+                <p className="text-slate-600 mb-6">
+                  Upload and index documents (PDF, DOCX, TXT) for the knowledge base.
+                </p>
+              </div>
+
+              <div className="bg-white rounded-xl p-8 border border-slate-200 shadow-sm">
+                <div className="w-12 h-12 rounded-md bg-green-100 flex items-center justify-center mb-4">
+                  <MessageSquare className="w-6 h-6 text-green-600" />
+                </div>
+                <h3 className="text-xl font-semibold text-slate-900 mb-2">
+                  Create User
+                </h3>
+                <p className="text-slate-600 mb-6">
+                  Create new admin and user accounts for system access.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {userType === 'user' && (
+            <div className="bg-white rounded-xl p-8 border border-slate-200 shadow-sm max-w-2xl">
+              <div className="w-12 h-12 rounded-md bg-purple-100 flex items-center justify-center mb-4">
+                <MessageSquare className="w-6 h-6 text-purple-600" />
+              </div>
+              <h3 className="text-xl font-semibold text-slate-900 mb-2">
+                Chat with Knowledge Base
+              </h3>
+              <p className="text-slate-600 mb-6">
+                Ask questions about the indexed documents and get AI-powered responses.
+              </p>
+            </div>
+          )}
+        </section>
+      )
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white">
