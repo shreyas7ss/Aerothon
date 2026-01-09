@@ -85,7 +85,11 @@ export default function Navbar() {
                       </>
                     )}
 
-                    <ActionBtn onClick={() => router.push('/chat')} icon={MessageSquare} label="Chat" />
+                    <ActionBtn
+                      onClick={() => router.push(userType === 'ruser' ? '/chat' : '/chat-dual')}
+                      icon={MessageSquare}
+                      label="Chat"
+                    />
 
                     <button
                       onClick={handleLogout}

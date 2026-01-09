@@ -1,15 +1,23 @@
-# schema.py - SQLAlchemy User table definition
+# schema.py - SQLAlchemy tables + API schemas
 import enum
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Enum, Integer, create_engine
+
+from pydantic import BaseModel
+from sqlalchemy import Column, String, DateTime, Enum, Integer, create_engine, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from typing import Literal, Optional, List
 
 # Enum for user type
 class UserType(enum.Enum):
 	admin = "admin"
 	user = "user"
 	ruser = "ruser"
+
+
+class ConversationMode(enum.Enum):
+	public = "public"
+	dual = "dual"
 
 Base = declarative_base()
 
@@ -20,6 +28,16 @@ class User(Base):
 	username = Column(String, unique=True, nullable=False)
 	password = Column(String, nullable=False)
 	createdAt = Column(DateTime, default=datetime.now)
+
+
+class ChatConversation(Base):
+	__tablename__ = "chat_conversations"
+	conversation_id = Column(Integer, primary_key=True, autoincrement=True)
+	user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False, index=True)
+	mode = Column(Enum(ConversationMode), nullable=False, index=True)
+	title = Column(String, nullable=True)
+	created_at = Column(DateTime, default=datetime.now, nullable=False)
+	updated_at = Column(DateTime, default=datetime.now, nullable=False)
 
 # Connect to local Postgres DB (update credentials as needed)
 # Explicitly use psycopg v3 driver.
@@ -33,3 +51,52 @@ def drop_tables():
 
 def create_tables():
 	Base.metadata.create_all(bind=engine)
+
+
+# ===================== API (Pydantic) Schemas =====================
+
+ConversationModeLiteral = Literal["public", "dual"]
+
+
+class ConversationItem(BaseModel):
+	conversation_id: int
+	mode: ConversationModeLiteral
+	title: Optional[str] = None
+	created_at: datetime
+	updated_at: datetime
+
+
+class ConversationListResponse(BaseModel):
+	items: List[ConversationItem]
+
+
+class CreateConversationRequest(BaseModel):
+	mode: Optional[ConversationModeLiteral] = None
+	title: Optional[str] = None
+
+
+class CreateConversationResponse(BaseModel):
+	conversation_id: int
+	mode: ConversationModeLiteral
+	title: Optional[str] = None
+
+
+class ChatMessage(BaseModel):
+	role: Literal["user", "assistant"]
+	content: str
+
+
+class ConversationHistoryResponse(BaseModel):
+	conversation_id: int
+	mode: ConversationModeLiteral
+	history: List[ChatMessage]
+
+
+class SendMessageRequest(BaseModel):
+	user_input: str
+
+
+class SendMessageResponse(BaseModel):
+	conversation_id: int
+	answer: str
+	sources: List[str]

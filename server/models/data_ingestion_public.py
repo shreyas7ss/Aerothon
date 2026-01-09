@@ -24,7 +24,6 @@ from PIL import Image
 
 
 # ============ CONFIG ============
-# ============ CONFIG ============
 # MINICPM_MODEL_PATH removed - using Ollama llava:7b
 CHROMA_ROOT = "db_emb/"
 UPLOAD_DIR = "uploads"
@@ -40,8 +39,6 @@ os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
 
 
 
-
-# ============ IMAGE EXTRACTION ============
 # ============ IMAGE EXTRACTION ============
 def load_vision_model():
     """Initialize ChatOllama with Llava model."""

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Send, Loader2, Plus, MessageSquare } from 'lucide-react';
+import { Loader2, MessageSquare, Plus, Send } from 'lucide-react';
 
 interface Message {
   type: 'user' | 'bot';
@@ -20,7 +20,7 @@ interface ConversationItem {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
-export default function ChatPage() {
+export default function ChatDualPage() {
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
@@ -40,8 +40,8 @@ export default function ChatPage() {
       return;
     }
     const userType = localStorage.getItem('user_type');
-    if (userType !== 'ruser') {
-      router.push('/chat-dual');
+    if (userType !== 'admin' && userType !== 'user') {
+      router.push('/chat');
       return;
     }
     setIsLoggedIn(true);
@@ -56,10 +56,18 @@ export default function ChatPage() {
     };
   };
 
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
   const loadConversations = async () => {
     setLoadingList(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/conversations?mode=public`, {
+      const res = await fetch(`${API_BASE_URL}/conversations?mode=dual`, {
         headers: authHeaders(),
       });
       const data = await res.json();
@@ -99,7 +107,7 @@ export default function ChatPage() {
     const res = await fetch(`${API_BASE_URL}/conversations`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ mode: 'public' }),
+      body: JSON.stringify({ mode: 'dual' }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Failed to create conversation');
@@ -110,14 +118,6 @@ export default function ChatPage() {
     if (!isAuthorized) return;
     loadConversations();
   }, [isAuthorized]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
 
   const handleNewChat = async () => {
     setLoading(true);
@@ -140,14 +140,9 @@ export default function ChatPage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-
     if (!input.trim()) return;
 
-    const userMessage: Message = {
-      type: 'user',
-      content: input,
-    };
-
+    const userMessage: Message = { type: 'user', content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
     setLoading(true);
@@ -161,35 +156,26 @@ export default function ChatPage() {
         await loadConversations();
       }
 
-      const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/send`, {
+      const res = await fetch(`${API_BASE_URL}/conversations/${conversationId}/send`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ user_input: input }),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) throw new Error(data.detail || 'Chat failed');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Chat failed');
 
       const botMessage: Message = {
         type: 'bot',
         content: data.answer || 'No response received',
         sources: data.sources || [],
       };
-
       setMessages((prev) => [...prev, botMessage]);
       await loadConversations();
     } catch (err) {
       console.error('Chat error:', err);
       const errorMessage: Message = {
         type: 'bot',
-        content: `Error: ${
-          err instanceof Error 
-            ? err.name === 'AbortError' 
-              ? 'Request timed out (60s). The AI is taking too long to respond.' 
-              : err.message 
-            : 'Failed to get response'
-        }`,
+        content: `Error: ${err instanceof Error ? err.message : 'Failed to get response'}`,
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
@@ -197,23 +183,16 @@ export default function ChatPage() {
     }
   };
 
-  if (!isLoggedIn) {
-    return null;
-  }
-
-  if (!isAuthorized) {
-    return null;
-  }
+  if (!isLoggedIn || !isAuthorized) return null;
 
   return (
     <main className="h-screen bg-slate-50 pt-32">
       <div className="h-[calc(100vh-8rem)] flex">
-        {/* Sidebar */}
         <aside className="w-80 border-r border-slate-200 bg-white">
           <div className="p-4 border-b border-slate-200 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-slate-600" />
-              <h2 className="text-sm font-semibold text-slate-900">Chats</h2>
+              <h2 className="text-sm font-semibold text-slate-900">Dual Chats</h2>
             </div>
             <button
               onClick={handleNewChat}
@@ -244,9 +223,7 @@ export default function ChatPage() {
                     <div className="font-medium text-slate-900 truncate">
                       {c.title || `Conversation ${c.conversation_id}`}
                     </div>
-                    <div className="text-xs text-slate-500">
-                      {new Date(c.updated_at).toLocaleString()}
-                    </div>
+                    <div className="text-xs text-slate-500">{new Date(c.updated_at).toLocaleString()}</div>
                   </button>
                 ))}
               </div>
@@ -254,7 +231,6 @@ export default function ChatPage() {
           </div>
         </aside>
 
-        {/* Chat panel */}
         <section className="flex-1 flex flex-col">
           <div className="flex-1 overflow-y-auto px-4 py-6">
             <div className="max-w-4xl mx-auto space-y-4">
@@ -265,16 +241,13 @@ export default function ChatPage() {
               ) : messages.length === 0 ? (
                 <div className="flex items-center justify-center h-64">
                   <div className="text-center">
-                    <h2 className="text-2xl font-bold text-slate-900 mb-2">Start a Conversation</h2>
+                    <h2 className="text-2xl font-bold text-slate-900 mb-2">Start a Dual Conversation</h2>
                     <p className="text-slate-600">Select a chat or create a new one</p>
                   </div>
                 </div>
               ) : (
                 messages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
+                  <div key={idx} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
                       className={`max-w-2xl rounded-lg px-4 py-3 ${
                         msg.type === 'user'
@@ -312,7 +285,6 @@ export default function ChatPage() {
             </div>
           </div>
 
-          {/* Message Input */}
           <div className="sticky bottom-0 border-t border-slate-200 bg-white px-4 py-4 shadow-lg">
             <div className="max-w-4xl mx-auto">
               <form onSubmit={handleSendMessage} className="flex gap-3">
