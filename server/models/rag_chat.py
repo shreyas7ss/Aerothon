@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 
 # ============ CONFIG ============
-CHROMA_PATH = "db_root/public/Knowledge_vectors"
+CHROMA_PATH = "db_emb/public/Knowledge_vectors"
 MODEL_NAME = "llama3.1:8b-instruct-q4_K_M"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 NEO4J_URI = "neo4j://localhost:7687"
@@ -76,13 +76,13 @@ def _get_chains():
 
     # QA chain with context
     qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a professional Document Analyst. Use the provided context to answer questions precisely.
+        ("system", """You are a strictly constrained Document Analyst. Your sole purpose is to answer questions based ONLY on the provided context.
 
-GUIDELINES:
-1. FACT RETRIEVAL: Provide direct answers grounded in context.
-2. SUMMARIZATION: Synthesize details into structured overviews. Use bullet points.
-3. INTEGRITY: Use ONLY provided context. If missing, say materials are insufficient.
-4. CITATION: Always mention source and page numbers.
+CRITICAL RULES:
+1. NO OUTSIDE KNOWLEDGE: You must NOT use any knowledge outside of the provided context. If the answer is not in the context, you MUST say "I cannot find the answer in the provided documents."
+2. FACTUAL ACCURACY: Do not hallucinate or make up information. If the context is ambiguous, state the ambiguity.
+3. CITATIONS: Always mention the source and page numbers from the context when available.
+4. FORMAT: Use bullet points for structured data.
 
 Context:
 {context}"""),
@@ -94,7 +94,10 @@ Context:
         RunnablePassthrough.assign(
             context=RunnableLambda(lambda x: x["standalone_query"]) 
                     | _retriever 
-                    | (lambda docs: "\n\n".join(d.page_content for d in docs))
+                    | (lambda docs: "\n\n".join(
+                        f"Source: {d.metadata.get('source', 'Unknown')} | Page: {d.metadata.get('page', 'N/A')}\nContent: {d.page_content}" 
+                        for d in docs
+                    ))
         )
         | qa_prompt
         | _llm

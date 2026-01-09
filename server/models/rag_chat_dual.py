@@ -10,8 +10,8 @@ from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 
 # ============ CONFIG ============
-CHROMA_PATH_PUBLIC = "db_root/public/Knowledge_vectors"
-CHROMA_PATH_SECURE = "secure_DB/secure/Knowledge_vectors"
+CHROMA_PATH_PUBLIC = "db_emb/public/Knowledge_vectors"
+CHROMA_PATH_SECURE = "db_emb/secure/Knowledge_vectors"
 MODEL_NAME = "llama3.1:8b-instruct-q4_K_M"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 NEO4J_URI = "neo4j://localhost:7687"
@@ -82,7 +82,10 @@ def _get_combined_context(query: str) -> str:
     secure_docs = _retriever_secure.invoke(query)
     
     all_docs = public_docs + secure_docs
-    return "\n\n".join(d.page_content for d in all_docs)
+    return "\n\n".join(
+        f"Source: {d.metadata.get('source', 'Unknown')} | Page: {d.metadata.get('page', 'N/A')}\nContent: {d.page_content}" 
+        for d in all_docs
+    )
 
 
 # ============ CHAINS ============
@@ -99,13 +102,13 @@ def _get_chains():
 
     # QA chain with dual context
     qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a professional Document Analyst with access to both general and confidential documents. Use the provided context to answer questions precisely.
+        ("system", """You are a strictly constrained Document Analyst with access to both general and confidential documents. Your sole purpose is to answer questions based ONLY on the provided context.
 
-GUIDELINES:
-1. FACT RETRIEVAL: Provide direct answers grounded in context.
-2. SUMMARIZATION: Synthesize details into structured overviews. Use bullet points.
-3. INTEGRITY: Use ONLY provided context. If missing, say materials are insufficient.
-4. CITATION: Always mention source and page numbers.
+CRITICAL RULES:
+1. NO OUTSIDE KNOWLEDGE: You must NOT use any knowledge outside of the provided context. If the answer is not in the context, you MUST say "I cannot find the answer in the provided documents."
+2. FACTUAL ACCURACY: Do not hallucinate or make up information. If the context is ambiguous, state the ambiguity.
+3. CITATIONS: Always mention the source and page numbers from the context when available.
+4. FORMAT: Use bullet points for structured data.
 
 Context (from both public and secure databases):
 {context}"""),

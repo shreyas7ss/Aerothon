@@ -16,19 +16,17 @@ import pymupdf4llm
 from docx2python import docx2python
 
 
-import torch
-from transformers import AutoModel, AutoTokenizer
+import base64
+import io
+from langchain_ollama import ChatOllama
+from langchain_core.messages import HumanMessage
 from PIL import Image
 
 
-# Global model cache to avoid reloading
-_MINICPM_MODEL = None
-_MINICPM_TOKENIZER = None
-
-
 # ============ CONFIG ============
-MINICPM_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MiniCPM-V")
-CHROMA_ROOT = "db_root"
+# ============ CONFIG ============
+# MINICPM_MODEL_PATH removed - using Ollama llava:7b
+CHROMA_ROOT = "db_emb/"
 UPLOAD_DIR = "uploads"
 IMAGE_STORAGE_DIR = "uploads/images"
 NEO4J_URI = "neo4j://localhost:7687"
@@ -44,38 +42,24 @@ os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
 
 
 # ============ IMAGE EXTRACTION ============
-def load_minicpm_model():
-    """Lazy load MiniCPM-V model and tokenizer."""
-    global _MINICPM_MODEL, _MINICPM_TOKENIZER
-    if _MINICPM_MODEL is None or _MINICPM_TOKENIZER is None:
-        print(f"🔄 Loading MiniCPM-V model from {MINICPM_MODEL_PATH}...")
-        try:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"🚀 Using device: {device}")
-           
-            _MINICPM_MODEL = AutoModel.from_pretrained(
-                MINICPM_MODEL_PATH,
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
-                device_map=device
-            )
-            _MINICPM_TOKENIZER = AutoTokenizer.from_pretrained(
-                MINICPM_MODEL_PATH,
-                trust_remote_code=True
-            )
-            _MINICPM_MODEL.eval()
-            print("✅ MiniCPM-V loaded successfully.")
-        except Exception as e:
-            print(f"❌ Failed to load MiniCPM-V: {e}")
-            raise e
-    return _MINICPM_MODEL, _MINICPM_TOKENIZER
+# ============ IMAGE EXTRACTION ============
+def load_vision_model():
+    """Initialize ChatOllama with Llava model."""
+    print(f"🔄 Connecting to Ollama (llava:7b)...")
+    return ChatOllama(model="llava:7b", temperature=0.7)
+
+
+def encode_image(image_path):
+    """Encode image to base64."""
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
 
 def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
     """Extract images from PDF and generate text descriptions using MiniCPM-V."""
     image_docs = []
     try:
-        model, tokenizer = load_minicpm_model()
+        # model, tokenizer = load_minicpm_model() # Removed
         pdf_document = fitz.open(pdf_path)
        
         for page_num in range(len(pdf_document)):
@@ -96,19 +80,21 @@ def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
                     with open(image_path, "wb") as img_file:
                         img_file.write(image_bytes)
                    
-                    # Generate description using MiniCPM-V
+                    # Generate description using Llava:7b
                     description = ""
                     try:
-                        img_pil = Image.open(image_path).convert('RGB')
-                        msgs = [{'role': 'user', 'content': 'Describe this image in detail.'}]
-                       
-                        res = model.chat(
-                            image=img_pil,
-                            msgs=msgs,
-                            tokenizer=tokenizer,
-                            sampling=True,
-                            temperature=0.7
+                        base64_image = encode_image(image_path)
+                        llm = load_vision_model()
+                        
+                        msg = HumanMessage(
+                            content=[
+                                {"type": "text", "text": "Describe this image in detail."},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                            ]
                         )
+                        
+                        res = llm.invoke([msg])
+                        description = f"Image on page {page_num + 1}: {res.content}"
                        
                         if res:
                             description = f"Image on page {page_num + 1}: {res}"
@@ -116,7 +102,7 @@ def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
                             description = f"Image on page {page_num + 1} (no description generated)"
                            
                     except Exception as e:
-                        print(f"⚠️ MiniCPM inference error: {e}")
+                        print(f"⚠️ Vision model inference error: {e}")
                         description = f"Image on page {page_num + 1} at {image_path}"
                    
                     image_docs.append(Document(
@@ -144,7 +130,7 @@ def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
 
 
 # ============ VECTOR STORE ============
-def get_or_create_vector_db(sensitivity: str = "public"):
+def get_or_create_vector_db(sensitivity: str = "secure"):
     persist_path = os.path.join(CHROMA_ROOT, sensitivity, "Knowledge_vectors")
     return Chroma(
         collection_name="Knowledge_Store",
@@ -208,7 +194,7 @@ def process_document(neo4j_driver: Any, file_path: str, filename: str, sensitivi
 
 
         # Chunk with metadata preservation
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=50)
         final_chunks = splitter.split_documents(extracted_docs)
         print(f"📄 {filename}: {len(final_chunks)} chunks created (text + images).")
 
