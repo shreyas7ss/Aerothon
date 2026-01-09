@@ -4,3 +4,5 @@
 __pycache__/
 
 .env
+
+models/MiniCPM-V

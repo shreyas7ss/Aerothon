@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 from neo4j import GraphDatabase
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
+import os
 from langchain_neo4j import Neo4jChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
@@ -36,7 +37,7 @@ def _initialize_components():
         embedding_function=embeddings,
         collection_name="Knowledge_Store"
     )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 15})  # Increased for multi-doc coverage
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 15})
     return llm, retriever
 
 
@@ -76,13 +77,13 @@ def _get_chains():
 
     # QA chain with context
     qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a professional Document Analyst. Use the provided context to answer questions precisely.
+        ("system", """You are a strictly constrained Document Analyst. Your sole purpose is to answer questions based ONLY on the provided context.
 
-GUIDELINES:
-1. FACT RETRIEVAL: Provide direct answers grounded in context.
-2. SUMMARIZATION: Synthesize details into structured overviews. Use bullet points.
-3. INTEGRITY: Use ONLY provided context. If missing, say materials are insufficient.
-4. CITATION: Always mention source and page numbers.
+CRITICAL RULES:
+1. NO OUTSIDE KNOWLEDGE: You must NOT use any knowledge outside of the provided context. If the answer is not in the context, you MUST say "I cannot find the answer in the provided documents."
+2. FACTUAL ACCURACY: Do not hallucinate or make up information. If the context is ambiguous, state the ambiguity.
+3. CITATIONS: Always mention the source and page numbers from the context when available.
+4. FORMAT: Use bullet points for structured data.
 
 Context:
 {context}"""),

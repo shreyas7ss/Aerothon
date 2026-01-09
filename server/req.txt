@@ -1,4 +1,3 @@
- --- Web Server & API ---
 fastapi[all]
 uvicorn[standard]
 python-multipart
@@ -13,6 +12,7 @@ langchain-core
 langchain-ollama
 langchain-chroma
 langchain-community
+langchain_neo4j
 
 # --- Graph Database ---
 neo4j
@@ -36,3 +36,4 @@ accelerate
 pillow
 timm
 sentencepiece
+peft
