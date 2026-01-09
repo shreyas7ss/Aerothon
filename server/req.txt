@@ -1,4 +1,4 @@
-# --- Web Server & API ---
+ --- Web Server & API ---
 fastapi[all]
 uvicorn[standard]
 python-multipart
@@ -25,3 +25,14 @@ sqlalchemy
 # --- Database driver (PostgreSQL) ---
 # Prefer psycopg v3 (wheels available more broadly; avoids pg_config builds).
 psycopg[binary]
+
+# --- Auth ---
+pyjwt
+
+# --- AI Models (MiniCPM-V) ---
+transformers
+torch
+accelerate
+pillow
+timm
+sentencepiece

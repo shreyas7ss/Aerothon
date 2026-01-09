@@ -50,7 +50,7 @@ SECRET_KEY = "your-secret-key-change-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 720  # 12 hours
 
-# python -m uvicorn routes.main:app --reload
+# python -m uvicorn routes.main:app --reload --host 0.0.0.0 --port 8000
 # cd /Users/adityasahrawat/dev/projects/Aerothon/server
 # source .venv/bin/activate
 
@@ -256,8 +256,11 @@ async def ingest_public(
 	"""Upload documents to public knowledge base."""
 	print(f"📤 PUBLIC INGESTION: Received {len(files)} file(s) | Category: {category}")
 	results = []
+	import os
+	os.makedirs("uploads", exist_ok=True)
 	for file in files:
-		file_path = f"uploads/{file.filename}"
+		file_path = os.path.abspath(f"uploads/{file.filename}")
+		print(f"💾 Saving to: {file_path}")
 		with open(file_path, "wb") as buffer:
 			import shutil
 			shutil.copyfileobj(file.file, buffer)
@@ -285,8 +288,11 @@ async def ingest_secure(
 	"""Upload documents to secure knowledge base."""
 	print(f"🔒 SECURE INGESTION: Received {len(files)} file(s) | Category: {category}")
 	results = []
+	import os
+	os.makedirs("secure_uploads", exist_ok=True)
 	for file in files:
-		file_path = f"secure_uploads/{file.filename}"
+		file_path = os.path.abspath(f"secure_uploads/{file.filename}")
+		print(f"💾 Saving to: {file_path}")
 		with open(file_path, "wb") as buffer:
 			import shutil
 			shutil.copyfileobj(file.file, buffer)
