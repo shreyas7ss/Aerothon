@@ -205,7 +205,7 @@ def change_password(
 	db: Session = Depends(get_db)
 ):
 	"""Change user password. Requires JWT authentication."""
-	# Verify JWT token and get user
+	# Verify JWT token and get user 
 	try:
 		payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
 		username: str = payload.get("sub")
