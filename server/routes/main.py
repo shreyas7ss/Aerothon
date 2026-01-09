@@ -1,15 +1,49 @@
 # main.py - Simple FastAPI server
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from fastapi.security import HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from routes.schema import User, SessionLocal, UserType
 from routes.middleware import create_access_token, verify_token
+from models import data_ingestion_public, data_ingestion_secure, rag_chat, rag_chat_dual
+from neo4j import GraphDatabase
 import jwt
 from datetime import timedelta
+from typing import List
 
 app = FastAPI()
 security = HTTPBearer()
+
+# Initialize Neo4j driver for ingestion routes
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "password"
+
+@app.on_event("startup")
+async def startup():
+    """Initialize Neo4j driver on app startup."""
+    app.state.neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    try:
+        app.state.neo4j_driver.verify_connectivity()
+        print("✅ Neo4j Connected")
+    except Exception as e:
+        print(f"❌ Neo4j Connection Failed: {e}")
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Close Neo4j driver on app shutdown."""
+    if hasattr(app.state, "neo4j_driver"):
+        app.state.neo4j_driver.close()
+
+# Enable CORS for frontend
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+	allow_credentials=True,
+	allow_methods=["*"],
+	allow_headers=["*"],
+)
 
 # JWT configuration (should match middleware.py)
 SECRET_KEY = "your-secret-key-change-in-production"
@@ -41,6 +75,11 @@ class ChangePasswordRequest(BaseModel):
 	old_password: str
 	new_password: str
 
+
+class ChatRequest(BaseModel):
+	user_input: str
+	session_id: str = "default_user"
+
  
 def get_db():
 	db = SessionLocal()
@@ -52,13 +91,16 @@ def get_db():
 @app.post("/login")
 def login(request: LoginRequest, db: Session = Depends(get_db)):
 	"""Login endpoint that returns a JWT token"""
+	print(f"🔑 Login attempt for user: {request.username}")
 	user = db.query(User).filter(User.username == request.username).first()
 	if user and user.password == request.password:
+		print(f"✅ Login successful for user: {request.username} (type: {user.type.value})")
 		# Create access token
 		access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 		access_token = create_access_token(
 			data={"sub": user.username}, expires_delta=access_token_expires
 		)
+		print(f"🎫 JWT token generated for {request.username}")
 		return {
 			"success": True,
 			"message": "Login successful",
@@ -67,6 +109,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 			"user_type": user.type.value,
 			"user_id": user.user_id
 		}
+	print(f"❌ Login failed for user: {request.username}")
 	raise HTTPException(status_code=401, detail="Invalid username or password")
 
 # Create admin endpoint
@@ -201,3 +244,132 @@ def change_password(
 		"message": "Password changed successfully",
 		"username": user.username
 	}
+
+
+# ============ INGESTION ROUTES (PUBLIC) ============
+@app.post("/ingest/public")
+async def ingest_public(
+	background_tasks: BackgroundTasks,
+	files: List[UploadFile] = File(...),
+	category: str = Form("general")
+):
+	"""Upload documents to public knowledge base."""
+	print(f"📤 PUBLIC INGESTION: Received {len(files)} file(s) | Category: {category}")
+	results = []
+	for file in files:
+		file_path = f"uploads/{file.filename}"
+		with open(file_path, "wb") as buffer:
+			import shutil
+			shutil.copyfileobj(file.file, buffer)
+		background_tasks.add_task(
+			data_ingestion_public.process_document,
+			app.state.neo4j_driver,
+			file_path,
+			file.filename,
+			"public",
+			category
+		)
+		print(f"✅ Queued: {file.filename} for public ingestion")
+		results.append({"file": file.filename, "status": "queued"})
+	print(f"📊 PUBLIC INGESTION: {len(results)} file(s) queued successfully")
+	return {"message": "Files queued for ingestion", "results": results}
+
+
+# ============ INGESTION ROUTES (SECURE) ============
+@app.post("/ingest/secure")
+async def ingest_secure(
+	background_tasks: BackgroundTasks,
+	files: List[UploadFile] = File(...),
+	category: str = Form("confidential")
+):
+	"""Upload documents to secure knowledge base."""
+	print(f"🔒 SECURE INGESTION: Received {len(files)} file(s) | Category: {category}")
+	results = []
+	for file in files:
+		file_path = f"secure_uploads/{file.filename}"
+		with open(file_path, "wb") as buffer:
+			import shutil
+			shutil.copyfileobj(file.file, buffer)
+		background_tasks.add_task(
+			data_ingestion_secure.process_document,
+			app.state.neo4j_driver,
+			file_path,
+			file.filename,
+			"secure",
+			category
+		)
+		print(f"✅ Queued: {file.filename} for secure ingestion")
+		results.append({"file": file.filename, "status": "queued"})
+	print(f"📊 SECURE INGESTION: {len(results)} file(s) queued successfully")
+	return {"message": "Files queued for secure ingestion", "results": results}
+
+
+# ============ CHAT ROUTES ============
+@app.post("/chat")
+async def chat(request: ChatRequest):
+	"""Process RAG query with chat history (public DB only)."""
+	print(f"💬 CHAT (PUBLIC): Session={request.session_id} | Query: {request.user_input[:50]}...")
+	response = rag_chat.rag_chat(request.user_input, request.session_id)
+	print(f"✅ CHAT (PUBLIC): Response generated with {len(response.get('sources', []))} source(s)")
+	return response
+
+
+@app.get("/chat/history/{session_id}")
+async def get_chat_history(session_id: str):
+	"""Retrieve chat history for public chat session."""
+	print(f"📜 Retrieving CHAT history for session: {session_id}")
+	try:
+		from langchain_neo4j import Neo4jChatMessageHistory
+		history = Neo4jChatMessageHistory(
+			url=NEO4J_URI,
+			username=NEO4J_USER,
+			password=NEO4J_PASSWORD,
+			session_id=session_id
+		)
+		from langchain_core.messages import HumanMessage, AIMessage
+		return {
+			"session_id": session_id,
+			"history": [
+				{"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content}
+				for m in history.messages
+			]
+		}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ DUAL CHAT ROUTES (PUBLIC + SECURE) ============
+@app.post("/chat-dual")
+async def chat_dual(request: ChatRequest):
+	"""Process RAG query with dual retrieval (public + secure DBs)."""
+	print(f"💬 CHAT-DUAL: Session={request.session_id} | Query: {request.user_input[:50]}...")
+	response = rag_chat_dual.rag_chat_dual(request.user_input, request.session_id)
+	print(f"✅ CHAT-DUAL: Response generated with {len(response.get('sources', []))} source(s)")
+	return response
+
+
+@app.get("/chat-dual/history/{session_id}")
+async def get_chat_dual_history(session_id: str):
+	"""Retrieve chat history for dual-DB chat session."""
+	print(f"📜 Retrieving CHAT-DUAL history for session: dual_{session_id}")
+	try:
+		from langchain_neo4j import Neo4jChatMessageHistory
+		# Use dual_ prefix to separate from single-DB history
+		history = Neo4jChatMessageHistory(
+			url=NEO4J_URI,
+			username=NEO4J_USER,
+			password=NEO4J_PASSWORD,
+			session_id=f"dual_{session_id}"
+		)
+		from langchain_core.messages import HumanMessage, AIMessage
+		return {
+			"session_id": session_id,
+			"history": [
+				{"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content}
+				for m in history.messages
+			]
+		}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+
+
