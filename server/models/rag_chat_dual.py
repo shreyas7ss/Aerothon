@@ -8,6 +8,9 @@ from langchain_neo4j import Neo4jChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+from models.custom_retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 
 # ============ CONFIG ============
 CHROMA_PATH_PUBLIC = "db_emb/public/Knowledge_vectors"
@@ -47,8 +50,37 @@ def _initialize_components():
         collection_name="Knowledge_Store"
     )
     
-    retriever_public = vectorstore_public.as_retriever(search_kwargs={"k": 10})
-    retriever_secure = vectorstore_secure.as_retriever(search_kwargs={"k": 10})
+    # --- Helper to create Ensemble Retriever ---
+    def create_ensemble(vstore, name):
+        try:
+            chroma_ret = vstore.as_retriever(search_kwargs={"k": 10})
+            data = vstore.get()
+            docs = []
+            if data['documents']:
+                for i in range(len(data['documents'])):
+                    docs.append(Document(
+                        page_content=data['documents'][i],
+                        metadata=data['metadatas'][i] if data['metadatas'] else {}
+                    ))
+            
+            if docs:
+                bm25 = BM25Retriever.from_documents(docs)
+                bm25.k = 10
+                ensemble = EnsembleRetriever(
+                    retrievers=[chroma_ret, bm25],
+                    weights=[0.5, 0.5]
+                )
+                print(f"✅ {name}: Ensemble Retriever initialized (Docs: {len(docs)})")
+                return ensemble
+            else:
+                print(f"⚠️ {name}: No docs, using Vector only")
+                return chroma_ret
+        except Exception as e:
+            print(f"⚠️ {name}: Ensemble init failed ({e}), using Vector only")
+            return vstore.as_retriever(search_kwargs={"k": 10})
+
+    retriever_public = create_ensemble(vectorstore_public, "Public")
+    retriever_secure = create_ensemble(vectorstore_secure, "Secure")
     
     return llm, retriever_public, retriever_secure
 
@@ -102,13 +134,14 @@ def _get_chains():
 
     # QA chain with dual context
     qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a strictly constrained Document Analyst with access to both general and confidential documents. Your sole purpose is to answer questions based ONLY on the provided context.
+        ("system", """You are a strictly constrained AI assistant. Your answer must be grounded ONLY in the provided context.
 
-CRITICAL RULES:
-1. NO OUTSIDE KNOWLEDGE: You must NOT use any knowledge outside of the provided context. If the answer is not in the context, you MUST say "I cannot find the answer in the provided documents."
-2. FACTUAL ACCURACY: Do not hallucinate or make up information. If the context is ambiguous, state the ambiguity.
-3. CITATIONS: Always mention the source and page numbers from the context when available.
-4. FORMAT: Use bullet points for structured data.
+RULES:
+1. STRICT GROUNDING: Answer ONLY using facts from the context. If the answer is not there, say "I cannot find the answer in the provided documents."
+2. NO HALLUCINATIONS: Do not guess, infer, or use outside knowledge.
+3. DIRECT STYLE: Be concise. Do NOT use transition words like "Additionally", "Furthermore", or "Moreover". Start directly with the answer.
+4. CITATIONS: Cite the "Source" and "Page" for every fact used.
+5. FORMAT: Use bullet points for lists.
 
 Context (from both public and secure databases):
 {context}"""),

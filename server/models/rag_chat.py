@@ -8,6 +8,9 @@ from langchain_neo4j import Neo4jChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+from models.custom_retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 
 # ============ CONFIG ============
 CHROMA_PATH = "db_emb/public/Knowledge_vectors"
@@ -24,7 +27,7 @@ def _initialize_components():
     llm = ChatOllama(
         model=MODEL_NAME, 
         temperature=0, 
-        num_ctx=8192, 
+        num_ctx=4062, 
         base_url=OLLAMA_BASE_URL
     )
     embeddings = OllamaEmbeddings(
@@ -36,7 +39,41 @@ def _initialize_components():
         embedding_function=embeddings,
         collection_name="Knowledge_Store"
     )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 15})  # Increased for multi-doc coverage
+    # Create Chroma retriever
+    chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+
+    # Create BM25 retriever (Hybrid Search)
+    print("🔄 Initializing BM25 Retriever from existing vectorstore...")
+    try:
+        # Fetch all documents from Chroma to build BM25 index
+        # valid_documents_only=True might be needed if using newer chroma versions, but .get() usually works
+        collection_data = vectorstore.get() 
+        documents = []
+        if collection_data['documents']:
+            for i in range(len(collection_data['documents'])):
+                documents.append(Document(
+                    page_content=collection_data['documents'][i],
+                    metadata=collection_data['metadatas'][i] if collection_data['metadatas'] else {}
+                ))
+        
+        if documents:
+            bm25_retriever = BM25Retriever.from_documents(documents)
+            bm25_retriever.k = 10
+            
+            # Combine in Ensemble (50% Semantic, 50% Keyword)
+            retriever = EnsembleRetriever(
+                retrievers=[chroma_retriever, bm25_retriever],
+                weights=[0.5, 0.5]
+            )
+            print(f"✅ Ensemble Retriever active (Docs: {len(documents)})")
+        else:
+            print("⚠️ No documents found in store, falling back to pure Vector retrieval.")
+            retriever = chroma_retriever
+            
+    except Exception as e:
+        print(f"⚠️ BM25 Init failed ({e}), falling back to pure Vector retrieval.")
+        retriever = chroma_retriever
+
     return llm, retriever
 
 
@@ -76,13 +113,14 @@ def _get_chains():
 
     # QA chain with context
     qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a strictly constrained Document Analyst. Your sole purpose is to answer questions based ONLY on the provided context.
+        ("system", """You are a strictly constrained AI assistant. Your answer must be grounded ONLY in the provided context.
 
-CRITICAL RULES:
-1. NO OUTSIDE KNOWLEDGE: You must NOT use any knowledge outside of the provided context. If the answer is not in the context, you MUST say "I cannot find the answer in the provided documents."
-2. FACTUAL ACCURACY: Do not hallucinate or make up information. If the context is ambiguous, state the ambiguity.
-3. CITATIONS: Always mention the source and page numbers from the context when available.
-4. FORMAT: Use bullet points for structured data.
+RULES:
+1. STRICT GROUNDING: Answer ONLY using facts from the context. If the answer is not there, say "I cannot find the answer in the provided documents."
+2. NO HALLUCINATIONS: Do not guess, infer, or use outside knowledge.
+3. DIRECT STYLE: Be concise. Do NOT use transition words like "Additionally", "Furthermore", or "Moreover". Start directly with the answer.
+4. CITATIONS: Cite the "Source" and "Page" for every fact used.
+5. FORMAT: Use bullet points for lists.
 
 Context:
 {context}"""),
@@ -146,6 +184,10 @@ def rag_chat(user_input: str, session_id: str = "default_user") -> Dict[str, Any
         print(f"📂 Retrieving documents from public DB...")
         docs = _retriever.invoke(standalone_query)
         print(f"✅ Retrieved {len(docs)} document chunk(s)")
+        for i, doc in enumerate(docs):
+            print(f"--- Chunk {i+1} ---")
+            print(doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content)
+            print("-----------------")
         
         # Generate response via RAG
         print(f"🤖 Generating LLM response...")

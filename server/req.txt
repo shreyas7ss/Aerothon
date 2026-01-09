@@ -36,3 +36,7 @@ accelerate
 pillow
 timm
 sentencepiece
+
+
+# --- Retrieval ---
+rank_bm25

@@ -194,7 +194,7 @@ def process_document(neo4j_driver: Any, file_path: str, filename: str, sensitivi
 
 
         # Chunk with metadata preservation
-        splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=50)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         final_chunks = splitter.split_documents(extracted_docs)
         print(f"📄 {filename}: {len(final_chunks)} chunks created (text + images).")
 
