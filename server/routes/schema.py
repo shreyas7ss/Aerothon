@@ -19,7 +19,7 @@ class User(Base):
 	type = Column(Enum(UserType), nullable=False)
 	username = Column(String, unique=True, nullable=False)
 	password = Column(String, nullable=False)
-	createdAt = Column(DateTime, default=datetime.utcnow)
+	createdAt = Column(DateTime, default=datetime.now)
 
 # Connect to local Postgres DB (update credentials as needed)
 DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
