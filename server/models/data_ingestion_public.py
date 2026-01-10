@@ -26,17 +26,17 @@ from PIL import Image
 # ============ CONFIG ============
 # ============ CONFIG ============
 # MINICPM_MODEL_PATH removed - using Ollama llava:7b
-CHROMA_ROOT = "db_emb/"
-UPLOAD_DIR = "uploads"
-IMAGE_STORAGE_DIR = "uploads/images"
+SERVER_DIR = Path(__file__).resolve().parents[1]
+CHROMA_ROOT = SERVER_DIR / "db_emb"
+UPLOAD_DIR = SERVER_DIR / "uploads"
+IMAGE_STORAGE_DIR = UPLOAD_DIR / "images"
 NEO4J_URI = "neo4j://localhost:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "password"
 DB_NAME = "neo4j"
 
-
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
+os.makedirs(str(UPLOAD_DIR), exist_ok=True)
+os.makedirs(str(IMAGE_STORAGE_DIR), exist_ok=True)
 
 
 
@@ -44,9 +44,9 @@ os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
 # ============ IMAGE EXTRACTION ============
 # ============ IMAGE EXTRACTION ============
 def load_vision_model():
-    """Initialize ChatOllama with Qwen3-VL (2B) model."""
-    print(f"🔄 Connecting to Ollama (qwen3-vl:2b)...")
-    return ChatOllama(model="qwen3-vl:2b", temperature=0.1)
+    """Initialize ChatOllama with Qwen2.5-VL model."""
+    print(f"🔄 Connecting to Ollama (qwen2.5-vl)...")
+    return ChatOllama(model="qwen2.5-vl", temperature=0.1)
 
 
 def encode_image(image_path):
@@ -56,12 +56,24 @@ def encode_image(image_path):
 
 
 def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
-    """Extract images from PDF and generate text descriptions using MiniCPM-V."""
+    """Extract, resize, and batch-process images from PDF using Qwen2.5-VL."""
     image_docs = []
+    
+    # Store pending tasks for batch processing
+    # Structure: {"page": int, "base64": str, "path": str, "index": int}
+    pending_images = []
+    
     try:
-        # model, tokenizer = load_minicpm_model() # Removed
         pdf_document = fitz.open(pdf_path)
-       
+        
+        # Initialize Vision Model ONCE
+        try:
+            llm = load_vision_model()
+        except Exception as e:
+            print(f"⚠️ Failed to load vision model: {e}")
+            return []
+
+        # Step 1: Extract and Preprocess All Images
         for page_num in range(len(pdf_document)):
             page = pdf_document[page_num]
             image_list = page.get_images(full=True)
@@ -72,55 +84,102 @@ def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
                     base_image = pdf_document.extract_image(xref)
                     image_bytes = base_image["image"]
                     image_ext = base_image["ext"]
+                    
+                    # 1. FILTER: Skip small files (< 2KB)
+                    if len(image_bytes) < 2048: 
+                        print(f"⏭️ Skipping small image p{page_num + 1} (Size: {len(image_bytes)} bytes)")
+                        continue
+                        
+                    # Load into PIL
+                    try:
+                        pil_img = Image.open(io.BytesIO(image_bytes))
+                    except Exception:
+                        continue # Skip invalid images
+
+                    width, height = pil_img.size
+                    
+                    # 2. FILTER: Skip small dimensions (< 50x50)
+                    if width < 50 or height < 50:
+                        print(f"⏭️ Skipping small image p{page_num + 1} ({width}x{height})")
+                        continue
+
+                    # 3. RESIZE: Max 1024px on longest side
+                    max_dim = 1024
+                    if width > max_dim or height > max_dim:
+                        print(f"📉 Resizing image p{page_num + 1} from {width}x{height} to max {max_dim}px")
+                        pil_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+                        
+                        # Save resized image back to bytes
+                        img_byte_arr = io.BytesIO()
+                        # Convert to RGB to avoid issues with some formats when saving as JPEG
+                        if pil_img.mode in ("RGBA", "P"):
+                            pil_img = pil_img.convert("RGB")
+                        pil_img.save(img_byte_arr, format='JPEG', quality=85)
+                        image_bytes = img_byte_arr.getvalue()
+                        image_ext = "jpg" # Enforce JPG for resized
                    
-                    # Save image
+                    # Save image to disk
                     image_filename = f"{doc_id}_p{page_num + 1}_img{img_index}.{image_ext}"
-                    image_path = os.path.join(IMAGE_STORAGE_DIR, image_filename)
+                    image_path = os.path.join(str(IMAGE_STORAGE_DIR), image_filename)
                    
                     with open(image_path, "wb") as img_file:
                         img_file.write(image_bytes)
-                   
-                    # Generate description using Qwen3-VL (2B)
-                    description = ""
-                    try:
-                        base64_image = encode_image(image_path)
-                        llm = load_vision_model()
-                        
-                        msg = HumanMessage(
-                            content=[
-                                {"type": "text", "text": "Analyze this image efficiently. 1. Transcribe any text visible in the image exactly (OCR). 2. Describe any charts, graphs, or visual elements in detail. 3. Provide a concise summary of the image's purpose."},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                            ]
-                        )
-                        
-                        res = llm.invoke([msg])
-                        description = f"Image on page {page_num + 1}: {res.content}"
-                       
-                        if res:
-                            description = f"Image on page {page_num + 1}: {res}"
-                        else:
-                            description = f"Image on page {page_num + 1} (no description generated)"
-                           
-                    except Exception as e:
-                        print(f"⚠️ Vision model inference error: {e}")
-                        description = f"Image on page {page_num + 1} at {image_path}"
-                   
+                    
+                    # Add to pending list for batch processing
+                    pending_images.append({
+                        "page": page_num + 1,
+                        "base64": encode_image(image_path),
+                        "path": image_path,
+                        "index": img_index
+                    })
+
+                except Exception as e:
+                    print(f"⚠️ Image extraction error p{page_num + 1}: {e}")
+        
+        pdf_document.close()
+
+        # Step 2: Batch Process Images
+        if pending_images:
+            print(f"🔄 Batch analyzing {len(pending_images)} images...")
+            
+            # Prepare batch messages
+            batch_messages = []
+            for img_data in pending_images:
+                msg = HumanMessage(
+                    content=[
+                        {"type": "text", "text": "Analyze this image efficiently. 1. Transcribe any text visible in the image exactly (OCR). 2. Describe any charts, graphs, or visual elements in detail. 3. Provide a concise summary of the image's purpose."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_data['base64']}"}}
+                    ]
+                )
+                batch_messages.append([msg]) # llm.batch expects a list of lists of messages
+            
+            try:
+                # Run batch inference
+                batch_results = llm.batch(batch_messages)
+                
+                # Process results
+                for i, res in enumerate(batch_results):
+                    img_info = pending_images[i]
+                    description = f"Image on page {img_info['page']}: {res.content}"
+                    
                     image_docs.append(Document(
                         page_content=description,
                         metadata={
                             "source": filename,
-                            "page": page_num + 1,
+                            "page": img_info['page'],
                             "doc_id": doc_id,
                             "type": "image",
-                            "image_path": image_path
+                            "image_path": img_info['path']
                         }
                     ))
-                except Exception as e:
-                    print(f"⚠️ Image extraction error p{page_num + 1}: {e}")
-       
-        pdf_document.close()
-        if image_docs:
-            print(f"📷 Extracted {len(image_docs)} images")
+                print(f"📷 Successfully analyzed {len(image_docs)} images")
+                
+            except Exception as e:
+                print(f"❌ Batch inference failed: {e}")
+                # Fallback? For now just log.
+        else:
+             print("ℹ️ No meaningful images found to analyze.")
+
     except Exception as e:
         print(f"❌ Image extraction failed: {e}")
    
@@ -131,7 +190,7 @@ def extract_images_from_pdf(pdf_path: str, doc_id: str, filename: str) -> list:
 
 # ============ VECTOR STORE ============
 def get_or_create_vector_db(sensitivity: str = "public"):
-    persist_path = os.path.join(CHROMA_ROOT, sensitivity, "Knowledge_vectors")
+    persist_path = str(CHROMA_ROOT / sensitivity / "Knowledge_vectors")
     return Chroma(
         collection_name="Knowledge_Store",
         persist_directory=persist_path,

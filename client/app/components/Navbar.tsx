@@ -168,7 +168,7 @@ function FileUploadModal({ onClose }: { onClose: () => void }) {
 
     try {
       const endpoint = uploadType === 'secure' ? '/ingest/secure' : '/ingest/public';
-      const res = await fetch(`http://10.0.15.88:8000${endpoint}`, {
+      const res = await fetch(`http://localhost:8000${endpoint}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
         body: formData,

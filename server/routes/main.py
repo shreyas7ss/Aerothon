@@ -22,10 +22,16 @@ from models import data_ingestion_public, data_ingestion_secure, rag_chat, rag_c
 from neo4j import GraphDatabase
 import jwt
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 app = FastAPI()
 security = HTTPBearer()
+
+# Always resolve paths relative to the server/ folder (not the process CWD)
+SERVER_DIR = Path(__file__).resolve().parents[1]
+UPLOADS_DIR = SERVER_DIR / "uploads"
+SECURE_UPLOADS_DIR = SERVER_DIR / "secure_uploads"
 
 # Initialize Neo4j driver for ingestion routes
 NEO4J_URI = "neo4j://localhost:7687"
@@ -309,10 +315,9 @@ async def ingest_public(
 	"""Upload documents to public knowledge base."""
 	print(f"📤 PUBLIC INGESTION: Received {len(files)} file(s) | Category: {category}")
 	results = []
-	import os
-	os.makedirs("uploads", exist_ok=True)
+	UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 	for file in files:
-		file_path = os.path.abspath(f"uploads/{file.filename}")
+		file_path = str((UPLOADS_DIR / file.filename).resolve())
 		print(f"💾 Saving to: {file_path}")
 		with open(file_path, "wb") as buffer:
 			import shutil
@@ -342,10 +347,9 @@ async def ingest_secure(
 	"""Upload documents to secure knowledge base."""
 	print(f"🔒 SECURE INGESTION: Received {len(files)} file(s) | Category: {category}")
 	results = []
-	import os
-	os.makedirs("secure_uploads", exist_ok=True)
+	SECURE_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 	for file in files:
-		file_path = os.path.abspath(f"secure_uploads/{file.filename}")
+		file_path = str((SECURE_UPLOADS_DIR / file.filename).resolve())
 		print(f"💾 Saving to: {file_path}")
 		with open(file_path, "wb") as buffer:
 			import shutil
@@ -587,5 +591,3 @@ def conversation_send(
 		"answer": response.get("answer", ""),
 		"sources": response.get("sources", []),
 	}
-
-

@@ -1,5 +1,6 @@
 import traceback
 from typing import Any, Dict, List
+from pathlib import Path
 
 from neo4j import GraphDatabase
 from langchain_ollama import ChatOllama, OllamaEmbeddings
@@ -13,7 +14,8 @@ from models.custom_retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 
 # ============ CONFIG ============
-CHROMA_PATH = "db_emb/public/Knowledge_vectors"
+SERVER_DIR = Path(__file__).resolve().parents[1]
+CHROMA_PATH = str(SERVER_DIR / "db_emb/public/Knowledge_vectors")
 MODEL_NAME = "llama3.1:8b-instruct-q4_K_M"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 NEO4J_URI = "neo4j://localhost:7687"
